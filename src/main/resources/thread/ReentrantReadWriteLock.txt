@@ -1,0 +1,62 @@
+ReentrantReadWriteLock实现了ReadWriteLock接口，内部定义了一个Sync类（继承自AQS），然后定义了一个ReadLock和
+一个WriteLock，实际上这两个锁本质上还是通过Sync控制完成操作的。
+
+需要注意的地方
+1. ReentrantLock不同，ReentrantLock中Sync的实现用state字段来表示一个锁定重入次数，而ReentrantReadWriteLock
+则是用state字段的高16位存储ReadLock重入次数，用低16位存储WriteLock的冲入次数。
+2. ReadLock在获取锁的时候会去判断state字段中是否存在其他线程的写锁，如果存在则直接获取失败，不存在则继续。虽然上
+面已经进行过写锁重入次数的判断，但是存在一种这样情况，如过在此次ReadLock获取之前已经存在有一次WriteLock获取操作在
+Queue里面进行等待获取锁了，那么不能将此次获取ReadLock的操作放行，因为可能当前正在执行的线程正在释放写锁，还来不及
+唤醒Queue头的Node就被此次ReadLock获取操作抢到了锁，那么Queue头的线程可能一直得不到执行而饿死。
+
+
+ReadLock的lock操作流程：
+  1. 进入tryAcquireShared方法，如果当前state字段中已经存在其他线程的写锁了，那么返回-1，然后进入操作2，否则进入
+  操作3;
+
+  2. 通过CAS往Queue中队尾添加一个Node，然后进入一个死循环，如果添加的Node是Queue中的第一个有效节点，那么会再次
+  尝试调用tryAcquireShared方法（实际上同步代码块的执行时间一般都很短，这样做可以减少一些不必要park和unpark操作）
+  如果此次获取锁成功以后就说明当前Queue的头部已经不存在写锁的Node，因此需要循环的唤醒之后等待的读锁Node;
+
+  3. 进入readerShouldBlock方法判断是否需要阻塞当前线程（公平锁的实现：判断Queue中时候已经有Node存在，如果是返
+  回true，否则返回false；非公平锁的实现：则是判断Queue头部的Node是不是以共享模式存在，如果不是的话返回true，否
+  则返回false），如果方法返回false且读锁的数量没有超过最大值，并通过CAS成功修改了state，那么进入操作4，否则进入
+  操作5;
+
+  4. 如果之前没有线程占有读锁，那么更新firstReader为当前线程，更新firstReaderHoldCount=1；如果之前只有当前线程已经
+  占有了读锁，那么只更新firstReaderHoldCount++；如果之前已经有了其他的线程占有了读锁，那么就更新cachedHoldCounter
+  字段（记录最后一个持有读锁的线程，持有的读锁数量）;
+
+  5.调用fullTryAcquireShared方法，这个方法的作用很多，但是总的来说目的只有一个，就是给当前线程一个自救的机会，同
+  时也可以避免一些没必要的park和unpark操作， 分接下来几点做一个阐述：
+    1) 操作3中如果readerShouldBlock方法返回true，那么这个方法中会再给线程一个“自救”的机会，只要能通过CAS成功修
+    改state就可以直接获取到锁，不用被park。这种情况只有再Queue头部中的writeLock节点已经完成操作以后才可能发生，
+    否则在进入fullTryAcquireShared方法发现在正在有线程占有写锁，或者是Queue头部中还有Node在等待获取写锁都会直接
+    返回-1；
+    2) 操作3中当前读锁使用数量已经到达最大值，在这一步中也有几回再次回去到都锁，前提就是有其他线程释放了读锁；
+    3）操作3中CAS修改state失败的情况下，在这一步可以循环的进行CAS修改state直到成功或者有其他线程占有率读锁，导致
+    当前线程不得不阻塞；
+
+ReadLock的unlock操作流程：
+  1. 如果当前线程是第一个获取读锁的线程，那么就会修改firstReaderHoldCount值（如果firstReaderHoldCount==0，将
+  firstReader=null，否则firstReaderHoldCount--）；如果当前线程不是第一个获取读锁的线程，那么就会更新线程本地
+  变量readHolds中count的值（count==1时直接remove readHolds，否则count--）；
+  2. 操作1完成后，通过循环的CAS操作修改state的值，如果修改后的state为0就返回true，否则返回false；
+  3. 如果操作2返回true，说明当前已经不存在任何读锁和写锁,那么就可以释放Queue的头节点了；
+
+WriteLock的lock操作流程：
+  1. 如果当前已经有读锁存在或者存在写锁，但是锁定线程不是自己的话就直接返回false，如果当前有写锁存在而且持有写锁
+  的线程就是自己的话返回true；
+  2. 进入writerShouldBlock方法判断的是否要阻塞当前线程（公平锁的实现：判断Queue中时候已经有Node存在，如果是返
+  回true，否则返回false；非公平锁实现：直接返回false）。如果writerShouldBlock返回true说明获取锁失败，直接返回
+  false，否则再给予当前线程一个机会通过CAS修改state成功以后可以直接设置exclusiveOwnerThread为当前线程，然后返
+  回true;
+  3. 操作2返回false说明获取写锁失败了，那么会进入acquireQueued方法，这里流程和ReentrantLock一致；
+
+
+WriteLock的unlock操作流程：
+  1. 修改state，如果修改后的state==0，就将exclusiveOwnerThread=null，说明当前不存在任何读锁和写锁；如果state
+  为则0返回true，否则返回false；
+  2. 如果操作1返回true，则释放Queue中头节点正在等待的Node，然后返回true，否则返回false；
+
+

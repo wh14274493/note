@@ -1,0 +1,34 @@
+java中的LockSupport.park()和LockSupport.unpark()两个方法是通过unsafe来实现的，我们翻阅JVM的源码得知在unsafe.cpp line 1249
+和unsafe.cpp line 1281分别对park和unpark进行了实现。
+
+我们先看一下thread的一些重要字段
+  1. ParkEvent * _ParkEvent; 这个字段定义在thread.hpp的Thread中，是给synchronized关键字使用的
+  2. Parker*    _parker; 这个字段定义在thread.hpp的JavaThread（Thread的子类）中就是给LockSupport的park和unpark使用的
+
+当我们执行new Thread();时会创建一个thread对象，Thread.cpp line 219 中调用了Thread的构造方法，在构造方法中对_ParkEvent进行了初始化
+park.hpp中的ParkEvent会维护一个静态变量FreeList，_ParkEvent初始化的过程中会通过自旋的方式去FreeList中获取一个没有与线程关联的ParkEvent对象，如果
+获取不到的话就会自己创建一个然后再与当前线程关联上，当线程死亡以后与之关联的ParkEvent又会被回收到FreeList上，而且一个线程最多只能关联一个
+ParkEvent，并且只有关联了ParkEvent的线程才能通过LockSupport.park()进行阻塞，其他的线程可以通过获取到当前的线程的ParkEvent对当前线程执行
+LockSupport.unpark()进行唤醒。
+创建线程的同时也会调用JavaThread的构造方法，这个方法中对_parker进行了初始化，park.hpp中的Parker同样也会维护一个FreeList，这里的初始化操作和_ParkEvent
+一样。
+
+Parker的父类PlatformParker和ParkEvent的父类PlatformEvent都定义了pthread_mutex_t互斥量和pthread_cond_t条件变量，这两个字段都是在父类的
+构造方法中进行初始化的
+
+Parker.park()和Parker.unpark()是根据Parker中定义的一个字段_counter来操作的
+首先进入方法park方法中需要通过pthread_mutex_trylock(_mutex)获取锁，如果发现_counter>0,则直接解锁退出，否则通过pthread_cond_wait (&_cond[_cur_index], _mutex)
+进入阻塞状态，等待unpark唤醒。唤醒之后会将_counter重新置为0；
+首先进入方法unpark方法中需要通过pthread_mutex_lock(_mutex)获取锁，如果发现_counter>=1,则直接解锁退出，否则将_counter设置为1，再通过pthread_cond_signal (&_cond[_cur_index])
+唤醒线程，然后解锁退出。
+
+ParkEvent.park()和ParkEvent.unpark()是根据ParkEvent的父类PlatformEvent中定义的两个变量_Event和_nParked来操作的
+首先进入方法park方法中需要先判断_Event==0，不成立的话直接退出，否则通过pthread_mutex_lock(_mutex)获取锁，并将_Event--，将_nParked++，然后通过pthread_cond_wait(_cond, _mutex)
+进入阻塞状态，等待unpark唤醒。唤醒之后将_nParked--，将_Event=0.
+首先进入方法unpark方法中需要通过pthread_mutex_lock(_mutex)获取锁，发现_nParked!=0时，通过pthread_cond_signal(_cond)将线程唤醒。
+
+
+
+注意事项：
+如果当前线程的interrupt标记为true，那么LockSupport.park()方法不会生效
+

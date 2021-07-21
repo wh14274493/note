@@ -1,0 +1,12 @@
+AbstractQueuedSynchronizer.java类简称AQS
+顾名思义AQS是通过queue来完成一系列关于lock的操作的
+queue中的每一个元素都是一个Node类型
+Node中有几个重要的属性
+pre:指向上一个Node
+next:指向下一个Node
+head:头节点（节点中的thread字段为null）
+tail:尾节点
+thread:当前等待线程
+waitStatus:当前等待状态(1表示等待已取消，可能是被中断了, -1表示正在等待signal唤醒, -2表示等待某个condition唤醒, -3表示)
+可以看出queue是一个双向链表类型
+同时AQS中还有一个state字段, 0表示lock没有被锁定, 1表示已被占用, 大于1表示重入多次

@@ -1,0 +1,42 @@
+1.monitor对象定义
+https://hg.openjdk.java.net/jdk8u/jdk8u/hotspot/file/85c5bc8157df/src/share/vm/runtime/objectMonitor.hpp   line 67
+2.monitor对象的初始化
+https://hg.openjdk.java.net/jdk8u/jdk8u/hotspot/file/85c5bc8157df/src/share/vm/runtime/objectMonitor.hpp   line 137
+
+monitorenter
+OrderAccess::fence();
+...
+OrderAccess::storeload();
+monitorexit
+
+1.java代码层面
+synchronized锁定代码块
+synchronized方法
+
+2.bytecode层面
+synchronized修饰的代码块前后会插入moniterenter、monitirexit指令
+synchronized修饰的方法会在flag上加上ACC_SYNCHRONIZED标志
+
+3.jvm层面
+jdk1.5之前是jvm没有做任何处理，只通过操作系统mutex来实现。
+
+jdk1.5之后引入锁升级的过程
+无锁---->偏向锁---->轻量级锁---->重量级锁
+整个锁状态的变迁与一个锁对象的对象头Object header息息相关，关于对象头的详细信息可以参考jvm源码markOop.hpp文件
+64 bits JVM:
+无锁状态：
+unused:25 | hash:31 | unused:1 | age:4 | biased_lock:0 | lock:01 (normal object)
+偏向锁状态：
+JavaThread*:54 | epoch:2 | unused:1 | age:4 | biased_lock:1 | lock:01 (biased object)
+轻量级锁状态：
+lock record ptr*:62 | lock:00
+重量级锁状态：
+mutex ptr*:62 | lock:10
+GC状态：
+cms mark info:62 | lock:11
+
+偏向锁：
+在没有锁竞争，而且总是有同一个现场访问的时候，可以通过偏向锁来优化锁的代价。
+一个线程在访问同步代码块时会在对象markword和栈帧中lock record的threadid处存储自身的id
+下次再次获取锁的时候只需要检测thread
+

@@ -1,0 +1,6 @@
+interrupt方法会打断阻塞状态运行的线程，并且抛出InterruptedException同时会清除状态标记，如sleep，wait，join等；
+对于非阻塞状态的线程只会将线程的打断状态设置为true;
+
+isInterrupted方法会返回线程的打断状态；
+
+interrupted方法会返回线程的打断状态，并将这个状态清除；

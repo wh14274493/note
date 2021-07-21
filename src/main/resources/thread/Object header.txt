@@ -1,0 +1,14 @@
+一个java对象的创建过程
+1.java代码中显示的通过Object o = new Object();这样的语句
+2.编译成字节码
+    NEW java/lang/Object
+    DUP
+    INVOKESPECIAL java/lang/Object.<init> ()V
+    ASTORE 1
+3.JVM对字节码进行解释是通过bytecodeInterpreter.cpp来实现的
+NEW java/lang/Object这一句的具体实现是在bytecodeInterpreter.cpp line 2182
+1.先检查需要实例化对象的类是不是interface类型，再计算对象的大小size
+2.使用当前线程的TLAB区域进行分配
+3.TLAB分配失败则尝试用cas的方式在共享Eden区进行分配，申请好对象的内存地址以后开始设置对象的markword和Klass指针
+4.去常量池中找到对象的Class对象并检测Class对象是不是抽象类、是否已经完成初始化工作
+5.创建一个oop对象，其中包含Object header（markOop、Klass*）

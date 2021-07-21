@@ -1,0 +1,8 @@
+synchronized方法获取锁的流程与synchronized代码块一样
+
+bytecodeInterpreter.cpp line 1820 开始对moniterenter指令进行解析
+1.查看markword是否有偏向锁标记，即查看低三位是否是101
+  如果存在偏向锁标志位那么会有以下几个判断逻辑
+  1) 如果锁偏向当前线程，那么biased_lock_entry_count_addr++以后直接运行代码
+  2) 如果锁已经被其他线程占用，就会尝试通过CAS的方式撤销偏向锁，撤销成功后将revoked_lock_entry_count_addr++然后进入轻量级锁的逻辑
+  3)

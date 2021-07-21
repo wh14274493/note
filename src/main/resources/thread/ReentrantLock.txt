@@ -1,0 +1,37 @@
+ReentrantLock是Lock的一个实现类。
+其中的lock和unlock方法实际上是通过内部一个Sync来实现的，同时Sync又是继承了AQS类的。
+ReentrantLock的默认构造方法是非公平锁NoFairSync实现的，也可以通过有参数的构造函数指定公平锁FairSync实现
+
+NoFairSync和FairSync的lock实现原理大致相同，分为以下几步：
+  1. 通过CAS的操作将AQS中的state字段从0改为1，如果成功则表示当前没有线程占用锁，那么直接将AQS的父类AOS中的
+  exclusiveOwnerThread字段设置为当前线程，否则表示锁已被其他线程占用将执行操作2
+
+  2. 调用tryAcquire方法尝试获取锁。获取state的值，如果为0就再次通过CAS的操作将AQS中的state字段从0改为1，如果成
+  功 则表示当前没有线程占用锁，那么直接将AQS的父类AOS中的exclusiveOwnerThread字段设置为当前线程，如果state不为
+  0，就判断exclusiveOwnerThread是不是已经设置成了当前线程，如果是的话则将state的值加一表示本次获取锁是重入操作
+  （注意这一步会判断state的值会不会溢出（state < 0），如果越界则会throw an error）
+
+  3. 如果操作2执行失败，就会将当前线程包装成一个Node对象（此时Node的waitStatus==0），并通过CAS操作将Node添加到
+  queue的tail位置，接下来调用acquireQueued方法循环的判断当前Node的前驱节点是不是head节点，如果是的话，将会再次
+  调用调用tryAcquire方法尝试获取锁成功的话线程就不会被park(猜测这样做的目的是因为大多数同步代码块都能在短时间内完
+  成并释放锁，如果再次尝试获取锁有很大概率可以获得锁，这样的话就可以避免通过park来阻塞当前线程，减少
+  开销)，如果前驱节点不是head或者tryAcquire失败了就会判断是不是需要park当前线程。
+  判断逻辑分为以下几步：
+    1) 如果前驱节点的waitStatus为Signal,那么返回true
+    2) 如果前驱节点的waitStatus为Cancelled,那么将会循环的将前面所有的Cancelled的Node删除，然后返回false
+    3) 其他情况下CAS的将前驱节点的waitStatus设置为Signal，然后返回false
+  这3个判断逻辑的目的其实是为了设置前驱节点的waitStatus=Signal（别忘了我们之前添加节点到Queue中的时候默认的
+  waitStatus==0）,以及删除Node之前的无效节点。如果判断逻辑返回true那么接下来会通过LockSupport.park()来阻塞当
+  前线程，否则继续acquireQueued方法循环的判断。
+
+NoFairSync和FairSync的实现不同的地方在于下面几点：
+   1. FairSync没有操作1这个步骤，这一步相当于是NoFairSync的第一次自旋操作；
+   2. 上面的操作2，NoFairSync在state==0的情况下直接CAS修改state为1（相当于是NoFairSync的第二次自旋操作），而
+   FairSync则是判断Queue中当前是否已经有Node存在，如果是的话则通过CAS将自己封装成Node添加到queue的tail位置，否
+   则才经行CAS操作修改state（FairSync的第一次自旋操作），FairSync这样做的目的是因为如果当前抢占锁的线程已经执行
+   完正准备唤醒queue中头部的下一个有效Node，结果当前线程直接CAS修改state成功那么将会比Queue头部的线程更快获取到
+   锁，导致不公平的现象发生。
+
+NoFairSync和FairSync的lock实现原理相同，分为以下几步：
+  1. 通过Sync的release来释放锁，将当前的state减一，如果state!=0，说明当前线程重入过此锁，返回false,否则通过
+  unparkSuccessor方法获取Queue队头的下一个有效的节点并通过LockSupport.unpark()方法唤醒线程。
